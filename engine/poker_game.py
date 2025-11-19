@@ -45,26 +45,40 @@ class PokerGame:
 
         # Pre-flop betting
         if len(self.active_players) > 1:
+            self.logger.info("\n--- PRE-FLOP BETTING ---")
             self._run_betting_round()
+            self._log_round_summary()
 
         # Flop
         if len(self.active_players) > 1:
             self.advance_to_next_round()
+            self.logger.info("\n--- FLOP BETTING ---")
             self._run_betting_round()
+            self._log_round_summary()
 
         # Turn
         if len(self.active_players) > 1:
             self.advance_to_next_round()
+            self.logger.info("\n--- TURN BETTING ---")
             self._run_betting_round()
+            self._log_round_summary()
 
         # River
         if len(self.active_players) > 1:
             self.advance_to_next_round()
+            self.logger.info("\n--- RIVER BETTING ---")
             self._run_betting_round()
+            self._log_round_summary()
 
         # Showdown
-        winners = self.determine_winners()
-        self._distribute_pot(winners)
+        if len(self.active_players) > 1:
+            self.logger.info("\n--- SHOWDOWN ---")
+            winners = self.determine_winners()
+            self._distribute_pot(winners)
+        else:
+            # Last remaining player wins
+            winners = self.active_players
+            self._distribute_pot(winners)
 
         # Move dealer button for next hand
         self.dealer_button = (self.dealer_button + 1) % len(self.player_ids)
@@ -77,9 +91,10 @@ class PokerGame:
         self.deal_hole_cards()
         self.post_blinds()
         
-        self.logger.info(f"Starting new hand. Dealer: {self.player_ids[self.dealer_button]}")
-        for p_id, p_hand in self.player_hands.items():
-            self.logger.info(f"{p_id} has {p_hand}")
+        self.logger.info(f"\n{'='*30}\n--- NEW HAND ---")
+        self.logger.info(f"Dealer: {self.player_ids[self.dealer_button]}")
+        for p_id in self.active_players:
+            self.logger.info(f"{p_id} has {self.player_hands[p_id]} (chips: {self.player_chips[p_id]})")
     
     def reset_hand(self):
         """Reset for a new hand"""
@@ -152,7 +167,8 @@ class PokerGame:
         self.current_player_index = (self.dealer_button + 1) % len(self.active_players)
         if self.round_name != "preflop":
              self.current_bet = 0
-             self.player_bets = {player: 0 for player in self.player_ids}
+             for p in self.player_ids:
+                self.player_bets[p] = 0
         
     def get_current_player(self) -> str:
         """Get the current player to act"""
@@ -207,6 +223,7 @@ class PokerGame:
         """Process a player's action"""
         if not self.is_valid_action(player, action, amount):
             # Default to fold if action is invalid
+            self.logger.warning(f"Bot {player} attempted illegal action {action.name}, folding.")
             action = PlayerAction.FOLD
             amount = 0
         
@@ -218,17 +235,17 @@ class PokerGame:
             self.folded_players.append(player)
             if player in self.active_players:
                 self.active_players.remove(player)
-            self.logger.info(f"{player} folds")
+            self.logger.info(f"  {player} folds")
         
         elif action == PlayerAction.CHECK:
-            self.logger.info(f"{player} checks")
+            self.logger.info(f"  {player} checks")
         
         elif action == PlayerAction.CALL:
             call_amount = min(to_call, self.player_chips[player])
             self.player_bets[player] += call_amount
             self.player_chips[player] -= call_amount
             self.pot += call_amount
-            self.logger.info(f"{player} calls {call_amount}")
+            self.logger.info(f"  {player} calls {call_amount}")
         
         elif action == PlayerAction.RAISE:
             raise_total = amount
@@ -237,20 +254,22 @@ class PokerGame:
             if self.player_chips[player] <= raise_amount:
                 # Player does not have enough chips, it's an all-in
                 raise_amount = self.player_chips[player]
-                self.player_bets[player] += raise_amount
-                self.pot += raise_amount
-                self.player_chips[player] = 0
-                self.current_bet = max(self.current_bet, self.player_bets[player])
-                self.logger.info(f"{player} goes all-in with {raise_amount}")
+                action = PlayerAction.ALL_IN
 
+            self.player_bets[player] += raise_amount
+            self.player_chips[player] -= raise_amount
+            self.pot += raise_amount
+            
+            if action == PlayerAction.ALL_IN:
+                self.logger.info(f"  {player} goes all-in with {raise_amount}")
+                if self.player_bets[player] > self.current_bet:
+                    self.current_bet = self.player_bets[player]
+                    self.players_acted.clear()
             else:
-                self.player_bets[player] += raise_amount
-                self.player_chips[player] -= raise_amount
-                self.pot += raise_amount
                 self.current_bet = self.player_bets[player]
-                self.logger.info(f"{player} raises to {self.current_bet}")
-                self.players_acted.clear() # Everyone needs to act again
-                self.players_acted.add(player)
+                self.logger.info(f"  {player} raises to {self.current_bet}")
+                self.players_acted.clear() 
+            self.players_acted.add(player)
 
 
         elif action == PlayerAction.ALL_IN:
@@ -261,9 +280,9 @@ class PokerGame:
             new_bet = self.player_bets[player]
             if new_bet > self.current_bet:
                 self.current_bet = new_bet
-                self.players_acted.clear() # Everyone needs to act again
-                self.players_acted.add(player)
-            self.logger.info(f"{player} goes all-in for {all_in_amount}")
+                self.players_acted.clear() 
+            self.players_acted.add(player)
+            self.logger.info(f"  {player} goes all-in for {all_in_amount}")
     
     def advance_to_next_player(self):
         """Move to the next player"""
@@ -276,21 +295,21 @@ class PokerGame:
         if len(self.active_players) <= 1:
             return True
         
-        # All players have had a chance to act
-        if len(self.players_acted) < len(self.active_players):
+        # All non-all-in players have had a chance to act
+        non_all_in_players = [p for p in self.active_players if self.player_chips[p] > 0]
+        if not self.players_acted.issuperset(non_all_in_players):
             return False
 
         # All non-folded, non-all-in players have the same amount bet
         max_bet = self.current_bet
-        for player in self.active_players:
-            if self.player_chips[player] > 0 and self.player_bets[player] != max_bet:
+        for player in non_all_in_players:
+            if self.player_bets[player] != max_bet:
                 return False
         
         return True
     
     def advance_to_next_round(self):
         """Advance to the next betting round"""
-        self.logger.info(f"Advancing to next round from {self.round_name}")
         if self.round_name == "preflop":
             self.deal_flop()
             self.round_name = "flop"
@@ -308,19 +327,19 @@ class PokerGame:
         self.deck.deal_card()  # Burn card
         for _ in range(3):
             self.community_cards.append(self.deck.deal_card())
-        self.logger.info(f"Flop: {self.community_cards}")
+        self.logger.info(f"FLOP: [{', '.join(map(str, self.community_cards))}]")
     
     def deal_turn(self):
         """Deal the turn (4th community card)"""
         self.deck.deal_card()  # Burn card
         self.community_cards.append(self.deck.deal_card())
-        self.logger.info(f"Turn: {self.community_cards[-1]}")
+        self.logger.info(f"TURN: {self.community_cards[-1]}")
     
     def deal_river(self):
         """Deal the river (5th community card)"""
         self.deck.deal_card()  # Burn card
         self.community_cards.append(self.deck.deal_card())
-        self.logger.info(f"River: {self.community_cards[-1]}")
+        self.logger.info(f"RIVER: {self.community_cards[-1]}")
     
     def determine_winners(self) -> List[str]:
         """Determine winners using HandEvaluator"""
@@ -332,10 +351,12 @@ class PokerGame:
             hole_cards = self.player_hands[player_id].cards
             all_cards = hole_cards + self.community_cards
             player_hands_to_evaluate.append((player_id, all_cards))
-            self.logger.info(f"{player_id} has hand: {hole_cards} and community cards are {self.community_cards}")
+            
+            best_hand_type, _, best_5_cards = HandEvaluator.evaluate_best_hand(all_cards)
+            self.logger.info(f"  {player_id}: Hand: {hole_cards} -> {best_hand_type} [{', '.join(map(str, best_5_cards))}]")
 
         winners = HandEvaluator.get_winners(player_hands_to_evaluate)
-        self.logger.info(f"Winners are: {winners}")
+        self.logger.info(f"WINNERS: {', '.join(winners)}")
         return winners
     
     def _distribute_pot(self, winners: List[str]):
@@ -351,3 +372,9 @@ class PokerGame:
         
         # Clear pot after distribution
         self.pot = 0
+
+    def _log_round_summary(self):
+        """Logs a summary of the current round."""
+        self.logger.info(f"Community Cards: [{', '.join(map(str, self.community_cards))}]")
+        self.logger.info(f"Pot: {self.pot}")
+        self.logger.info("-" * 20)

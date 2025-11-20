@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple
 
 from bot_api import PokerBotAPI, PlayerAction, GameInfoAPI
 from engine.cards import Card, Rank, HandEvaluator
-from engine.poker_game import GameState
+from engine.game_state import GameState
 
 
 class ConservativeBot(PokerBotAPI):

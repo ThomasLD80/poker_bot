@@ -1,41 +1,19 @@
+
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import logging
 
 from .cards import Card, Deck, HandEvaluator
+from .game_state import GameState, PlayerAction, PlayerHand
+from bot_api import get_legal_actions
 
-
-@dataclass
-class PlayerHand:
-    cards: List[Card]
-
-class PlayerAction(Enum):
-    FOLD = 0
-    CHECK = 1
-    CALL = 2
-    RAISE = 3
-    ALL_IN = 4
-
-@dataclass
-class GameState:
-    pot: int
-    community_cards: List[Card]
-    current_bet: int
-    player_chips: Dict[str, int]
-    player_bets: Dict[str, int]
-    active_players: List[str]
-    current_player: str
-    round_name: str
-    min_bet: int
-    big_blind: int
-    small_blind: int
 
 class PokerGame:
     """Manages a single hand of Texas Hold'em poker"""
     
     def __init__(self, players: Dict[str, any], starting_chips: int = 1000, 
-                 small_blind: int = 10, big_blind: int = 20, dealer_button_index: int = 0):
+                 small_blind: int = 10, big_blind: int = 20):
         self.player_bots = players
         self.player_ids = list(players.keys())
         self.starting_chips = starting_chips
@@ -54,7 +32,7 @@ class PokerGame:
         # Betting state
         self.pot = 0
         self.current_bet = 0
-        self.dealer_button = dealer_button_index
+        self.dealer_button = 0
         self.round_name = "preflop"
         self.players_acted = set()
 
@@ -142,30 +120,11 @@ class PokerGame:
         if len(self.active_players) < 2:
             return
         
-        # Determine the players who post blinds relative to the dealer
-        # Find the index of the current dealer within the active players list
-        try:
-            dealer_active_index = self.active_players.index(self.player_ids[self.dealer_button])
-        except ValueError:
-            # Dealer might have been eliminated, find next active player as nominal dealer
-            for i in range(len(self.player_ids)):
-                potential_dealer_index = (self.dealer_button + i) % len(self.player_ids)
-                potential_dealer = self.player_ids[potential_dealer_index]
-                if potential_dealer in self.active_players:
-                    self.dealer_button = potential_dealer_index # Update actual dealer button
-                    dealer_active_index = self.active_players.index(potential_dealer)
-                    break
-            else: # Should not happen if len(self.active_players) >= 1
-                return # No active dealer found (e.g., all players eliminated)
+        small_blind_player_index = (self.dealer_button + 1) % len(self.active_players)
+        big_blind_player_index = (self.dealer_button + 2) % len(self.active_players)
         
-        if len(self.active_players) == 2:
-            # Heads-up: Dealer is small blind, non-dealer is big blind
-            small_blind_player = self.active_players[dealer_active_index]
-            big_blind_player = self.active_players[(dealer_active_index + 1) % 2]
-        else:
-            # Normal play: Small blind is left of dealer, big blind is left of small blind
-            small_blind_player = self.active_players[(dealer_active_index + 1) % len(self.active_players)]
-            big_blind_player = self.active_players[(dealer_active_index + 2) % len(self.active_players)]
+        small_blind_player = self.active_players[small_blind_player_index]
+        big_blind_player = self.active_players[big_blind_player_index]
         
         # Post small blind
         small_blind_amount = min(self.small_blind, self.player_chips[small_blind_player])
@@ -193,7 +152,7 @@ class PokerGame:
             bot = self.player_bots[player_id]
             game_state = self.get_game_state()
             player_hand = self.get_player_hand(player_id)
-            legal_actions = self.get_legal_actions(game_state, player_id)
+            legal_actions = get_legal_actions(game_state, player_id)
             min_bet = game_state.current_bet + game_state.big_blind
             max_bet = self.player_chips[player_id] + self.player_bets[player_id]
 
@@ -205,22 +164,7 @@ class PokerGame:
     def _start_betting_round(self):
         """Resets betting state for a new round."""
         self.players_acted = set()
-        # Find the index of the current dealer within the active players list
-        try:
-            dealer_active_index = self.active_players.index(self.player_ids[self.dealer_button])
-        except ValueError:
-            # Dealer might have been eliminated, find next active player as nominal dealer
-            for i in range(len(self.player_ids)):
-                potential_dealer_index = (self.dealer_button + i) % len(self.player_ids)
-                potential_dealer = self.player_ids[potential_dealer_index]
-                if potential_dealer in self.active_players:
-                    self.dealer_button = potential_dealer_index # Update actual dealer button
-                    dealer_active_index = self.active_players.index(potential_dealer)
-                    break
-            else: # Should not happen if len(self.active_players) >= 1
-                dealer_active_index = 0 # Default to first active player if no valid dealer is found (shouldn't happen with >=1 active)
-
-        self.current_player_index = (dealer_active_index + 1) % len(self.active_players)
+        self.current_player_index = (self.dealer_button + 1) % len(self.active_players)
         if self.round_name != "preflop":
              self.current_bet = 0
              for p in self.player_ids:
@@ -252,49 +196,32 @@ class PokerGame:
         """Get a player's hole cards"""
         return self.player_hands.get(player)
     
-    def validate_action(self, action: PlayerAction, amount: int, game_state: GameState, 
-                   player_name: str) -> bool:
-        """
-        Validate if an action is legal given the current game state.
-        
-        Args:
-            action: The action the player wants to take
-            amount: The bet amount (if applicable)
-            game_state: Current game state
-            player_name: Name of the player taking the action
-            
-        Returns:
-            bool: True if the action is valid
-        """
-        if player_name not in game_state.active_players:
+    def is_valid_action(self, player: str, action: PlayerAction, amount: int = 0) -> bool:
+        """Check if a player action is valid"""
+        if player not in self.active_players or player in self.folded_players:
             return False
         
-        if player_name != game_state.current_player:
-            return False
-        
-        player_chips = game_state.player_chips[player_name]
-        player_bet = game_state.player_bets[player_name]
-        to_call = game_state.current_bet - player_bet
+        player_bet = self.player_bets.get(player, 0)
+        to_call = self.current_bet - player_bet
+        available_chips = self.player_chips.get(player, 0)
         
         if action == PlayerAction.FOLD:
             return True
         elif action == PlayerAction.CHECK:
             return to_call == 0
         elif action == PlayerAction.CALL:
-            return to_call > 0 and player_chips >= to_call
+            return to_call > 0
         elif action == PlayerAction.RAISE:
-            min_raise = game_state.current_bet + game_state.big_blind
-            return (amount >= min_raise and 
-                    player_chips >= (amount - player_bet) and
-                    amount > game_state.current_bet)
+            min_raise = self.current_bet + self.big_blind # Simplified
+            return amount >= min_raise and available_chips >= (amount - player_bet)
         elif action == PlayerAction.ALL_IN:
-            return player_chips > 0
+            return available_chips > 0
         
         return False
-
+    
     def process_action(self, player: str, action: PlayerAction, amount: int = 0):
         """Process a player's action"""
-        if not self.validate_action(action, amount, self.get_game_state(), player):
+        if not self.is_valid_action(player, action, amount):
             # Default to fold if action is invalid
             self.logger.warning(f"Bot {player} attempted illegal action {action.name}, folding.")
             action = PlayerAction.FOLD
@@ -451,40 +378,3 @@ class PokerGame:
         self.logger.info(f"Community Cards: [{', '.join(map(str, self.community_cards))}]")
         self.logger.info(f"Pot: {self.pot}")
         self.logger.info("-" * 20)
-
-    def get_legal_actions(self, game_state: GameState, player_name: str) -> List[PlayerAction]:
-        """
-        Get all legal actions for a player given the current game state.
-        
-        Args:
-            game_state: Current game state
-            player_name: Name of the player
-            
-        Returns:
-            List[PlayerAction]: List of legal actions
-        """
-        if (player_name not in game_state.active_players or 
-            player_name != game_state.current_player):
-            return []
-        
-        player_chips = game_state.player_chips[player_name]
-        player_bet = game_state.player_bets[player_name]
-        to_call = game_state.current_bet - player_bet
-        
-        legal_actions = [PlayerAction.FOLD]
-        
-        if to_call == 0:
-            legal_actions.append(PlayerAction.CHECK)
-        else:
-            if player_chips >= to_call:
-                legal_actions.append(PlayerAction.CALL)
-        
-        # Can raise if we have chips beyond the call amount
-        if player_chips > to_call:
-            legal_actions.append(PlayerAction.RAISE)
-        
-        # Can always go all-in if we have chips
-        if player_chips > 0:
-            legal_actions.append(PlayerAction.ALL_IN)
-        
-        return legal_actions

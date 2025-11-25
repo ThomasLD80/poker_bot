@@ -5,17 +5,17 @@ Orchestrates the entire poker tournament from start to finish
 import sys
 import logging
 import time
+import random
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
 import os
 
-from engine.poker_game import PokerGame
-from engine.game_state import GameState, PlayerAction
+from engine.poker_game import PokerGame, GameState, PlayerAction
 from engine.cards import HandEvaluator
 from tournament import PokerTournament, TournamentSettings, TournamentType
 from bot_manager import BotManager
-from bot_api import get_legal_actions
+
 
 
 class TournamentRunner:
@@ -44,6 +44,10 @@ class TournamentRunner:
     
     def setup_logging(self):
         """Configure logging for the tournament"""
+        # Ensure stdout handles UTF-8 (fixes Windows emoji issues)
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+
         # Create logs directory
         os.makedirs(self.log_directory, exist_ok=True)
         
@@ -53,7 +57,7 @@ class TournamentRunner:
         
         # Configure logging
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.DEBUG,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(log_filename, encoding='utf-8'),
@@ -140,7 +144,8 @@ class TournamentRunner:
                 game = PokerGame(bots, 
                                starting_chips=0,  # Will use tournament chip counts
                                small_blind=small_blind, 
-                               big_blind=big_blind)
+                               big_blind=big_blind,
+                               dealer_button_index=table.dealer_button % len(player_ids))
                 
                 # Set actual chip counts from tournament
                 for player in player_ids:
@@ -152,6 +157,7 @@ class TournamentRunner:
         for table_id, game in self.current_games.items():
             try:
                 self.play_single_hand(table_id, game)
+                self.tournament.tables[table_id].dealer_button = game.dealer_button
             except Exception as e:
                 self.logger.error(f"Error playing hand on table {table_id}: {str(e)}")
         
@@ -165,6 +171,13 @@ class TournamentRunner:
         try:
             # The game loop is now handled by the PokerGame itself
             final_chips = game.play_hand()
+
+            # Check for disqualified bots and remove their chips
+            for player_id in list(final_chips.keys()):
+                bot = self.bot_manager.get_bot(player_id)
+                if bot and bot.is_disqualified():
+                    self.logger.info(f"Bot {player_id} disqualified. Removing remaining chips ({final_chips[player_id]}).")
+                    final_chips[player_id] = 0
 
             # Update tournament chip counts from the game's final state
             for player_id, chips in final_chips.items():

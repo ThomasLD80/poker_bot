@@ -181,5 +181,3 @@ cython_debug/
 .cursorindexingignore
 
 logs/
-players/
-.DS_Store

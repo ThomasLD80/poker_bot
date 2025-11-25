@@ -145,7 +145,11 @@ class TournamentRunner:
                                starting_chips=0,  # Will use tournament chip counts
                                small_blind=small_blind, 
                                big_blind=big_blind,
+<<<<<<< HEAD
                                dealer_button_index=table.dealer_button % len(player_ids))
+=======
+                               dealer_button_index=random.randrange(len(bots)))
+>>>>>>> parent of fd64e11 (Merge branch 'main' of https://github.com/ThomasLD80/poker_bot)
                 
                 # Set actual chip counts from tournament
                 for player in player_ids:

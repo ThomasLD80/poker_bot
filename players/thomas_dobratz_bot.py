@@ -5,8 +5,8 @@ This is the bot I am entering in the tournament
 from typing import List, Dict, Any
 import random
 
-from bot_api import PokerBotAPI, PlayerAction
-from engine.cards import Card, Rank, Suit
+from bot_api import PokerBotAPI, PlayerAction, GameInfoAPI
+from engine.cards import Card, Rank, Suit, HandEvaluator
 from engine.poker_game import GameState
 
 best_preflop_raise = 80 #raise for ACE-ACE
@@ -107,6 +107,34 @@ class ThomasDobratzBot(PokerBotAPI):
         
         # All other actions don't need an amount
         return action, 0
+    
+    def _preflop_action(self, game_state: GameState, hole_cards: List[Card],
+                    legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
+        """Returns the preflop action."""
+
+        #if we are somehow calling preflop_action when there are more than two hole cards,
+        #something has gone wrong, and we fold to avoid taking an illegal action
+        if len(hole_cards) != 2:
+            return PlayerAction.FOLD, 0
+        
+        card1, card2 = hole_cards #this is our hand
+
+        hand_tuple1 = (card1.rank, card2.rank) #one possible order of our hand
+        hand_tuple2 = (card2.rank, card1.rank) #the other possible order (we need to check both)
+
+        for _hand in preflop_hand_behavior: #tries to match our hand with each hand in the good hands list
+            if _hand[0] == hand_tuple1 or _hand[0] == hand_tuple2: #are the cards of the right rank?
+                if (card1.suit == card2.suit) == _hand[1]: #are the cards the correct status of matching?
+                    if PlayerAction.RAISE in legal_actions and game_state.current_bet < _hand[3] * max_bet:
+                        if game_state.current_bet + _hand[2] <= max_bet: #don't bet too high
+                            return PlayerAction.RAISE, game_state.current_bet + _hand[2]
+        
+        #if we didn't find our hand:
+        if game_state.current_bet = min_bet:
+            pass
+
+
+
     
     def hand_complete(self, game_state: GameState, hand_result: Dict[str, Any]):
         """Track hands played"""

@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 import random
 
 from bot_api import PokerBotAPI, PlayerAction
-from engine.cards import Card
+from engine.cards import Card, Rank, Suit
 from engine.poker_game import GameState
 
 best_preflop_raise = 80 #raise for ACE-ACE
